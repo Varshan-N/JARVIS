@@ -8,6 +8,7 @@ Like OpenAI voice mode — reactor breathes with your voice
 import sys, math, time
 from datetime import datetime
 from collections import deque
+from pynput import keyboard as kb
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -161,6 +162,7 @@ class ArcReactor(QWidget):
         self._amplitude = v
         self._hist_buf.append(v)
 
+    # ── Internal tick ─────────────────────────────────────────────────
     def _tick(self):
         amp = self._amplitude
         active = self._speaking or self._tts
@@ -617,6 +619,11 @@ class JarvisUI(QMainWindow):
         self._sub_lbl.setText("Listening…  speak now")
         self._start_monitor()
 
+        # Earphone single tap = toggle mic
+        self._kb_listener = kb.Listener(on_press=self._on_earphone_tap)
+        self._kb_listener.daemon = True
+        self._kb_listener.start()
+
     def resizeEvent(self, e):
         super().resizeEvent(e)
         if hasattr(self, "_root_ref"):
@@ -792,13 +799,17 @@ class JarvisUI(QMainWindow):
         self._set_mode("LISTENING", C['mic_on'])
         self._sub_lbl.setText("Listening…  speak now")
 
+    def _on_earphone_tap(self, key):
+        if key == kb.Key.media_play_pause:
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(0, self._toggle_mic)
+
     def _toggle_mic(self):
         self._mic_on = not self._mic_on
         self._refresh_mic()
         self._reactor.set_speaking(self._mic_on)
         if self._mic_on:
             self._assistant.is_listening = True
-            self._assistant.audio_thread.reset()   # clear Chrome output, restart fresh
             self._set_mode("LISTENING", C['mic_on'])
             self._sub_lbl.setText("Listening…  speak now")
             self._start_monitor()
@@ -863,6 +874,8 @@ class JarvisUI(QMainWindow):
     def closeEvent(self, e):
         self._stop_monitor()
         self._assistant.stop()
+        if hasattr(self, '_kb_listener'):
+            self._kb_listener.stop()
         QApplication.quit()
         e.accept()
 

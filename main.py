@@ -1,7 +1,6 @@
 import sounddevice as sd
 import edge_tts as tts
-import soundfile as sf
-import queue, numpy, time, pyttsx3, sys, operator, os,io, soundfile, re, asyncio,tempfile, pygame, tools as tools_module
+import queue, numpy, time, sys, operator, os,io, soundfile, re, asyncio,tempfile, pygame, tools as tools_module
 from PyQt5.QtCore import QThread, pyqtSignal, QCoreApplication, QTimer
 from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph, END, START
@@ -9,12 +8,6 @@ from langgraph.prebuilt import ToolNode
 from langchain_core.messages import HumanMessage, SystemMessage, AnyMessage, ToolMessage
 from typing import TypedDict, Annotated
 from groq import Groq
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-import mtranslate as mt
 from dotenv import load_dotenv
 from tools import OpenApp,CloseApp,open_url,web_search,GoogleSearchByTopic,fetch_whatsapp_unread,\
                   set_volume,set_brightness,control_youtube,window_control,desktop_control,file_manager,youtube_search,\
@@ -26,191 +19,139 @@ from tools import OpenApp,CloseApp,open_url,web_search,GoogleSearchByTopic,fetch
 load_dotenv()
 
 api_key=os.getenv("GROQ_API_KEY")
+edge_voice=os.getenv("EDGE_VOICE")
 
 client=Groq(api_key=api_key)
 
 samplerate=16000
-block_size=int(samplerate * 0.3)
-energy_threshold=0.03
-silence_timeout=1.3
-tts_rate=200
-tts_volume=1.0
+block_size=int(samplerate * 0.5)
+energy_threshold=0.02     
+silence_timeout=1.0
 channels=1
-edge_voice=os.getenv("EDGE_VOICE")
-
-Input_Language=os.getenv("INPUT_LANGUAGE")
-
-HtmlCode = '''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <title>Speech Recognition</title>
-</head>
-<body>
-    <button id="start" onclick="startRecognition()">Start Recognition</button>
-    <button id="end" onclick="stopRecognition()">Stop Recognition</button>
-    <p id="output"></p>
-    <script>
-        const output = document.getElementById('output');
-        let recognition;
-
-        function startRecognition() {
-            recognition = new webkitSpeechRecognition() || new SpeechRecognition();
-            recognition.lang = '';
-            recognition.continuous = true;
-
-            recognition.onresult = function(event) {
-                const transcript = event.results[event.results.length - 1][0].transcript;
-                output.textContent += transcript;
-            };
-
-            recognition.onend = function() {
-                recognition.start();
-            };
-            recognition.start();
-        }
-
-        function stopRecognition() {
-            recognition.stop();
-            output.innerHTML = "";
-        }
-    </script>
-</body>
-</html>'''
-
-HtmlCode=str(HtmlCode).replace("recognition.lang = '';",f"recognition.lang ='{Input_Language}';")
-
-with open(r"Voice.html","w") as f:
-    f.write(HtmlCode)
-
-current_dic= os.getcwd()
-
-Link=f"{current_dic}/Voice.html"
-
-chrome_options = Options()
-user_agent=os.getenv("USER_AGENT")
-chrome_options.add_argument(f"user-agent={user_agent}")
-chrome_options.add_argument("--use-fake-ui-for-media-stream")
-chrome_options.add_argument("--use-fake-device-for-media-stream")
-chrome_options.add_argument("--headless=new")
-
-service=Service(ChromeDriverManager().install())
-driver=webdriver.Chrome(service=service, options=chrome_options)
 
 #------Audio capturing thread ------#
 class Audiocapturerthread(QThread):
-    speech_start    = pyqtSignal()
-    speech_detected = pyqtSignal(str)   
-    speech_interrupt = pyqtSignal(str)  
-    energy_update   = pyqtSignal(float) 
+    speech_start=pyqtSignal()
+    speech_end=pyqtSignal(numpy.ndarray)
+    energy_update=pyqtSignal(float)
 
     def __init__(self):
         super().__init__()
-        self.is_running       = False
-        self.tts_active       = False
-        self._tts_end_time    = 0.0
-        self.TTS_COOLDOWN     = 1.5   
-    
-    def querymodifier(Query):
-        new_query=Query.lower().strip()
-        query_words=new_query.split()
-        question_words=["how","what","who","where","when","why","which","whose","whom","can you","what's"]
+        self.audio_queue=queue.Queue()
+        self.is_running=False
+        self.audio_buffer=[]
+        self.recording=False
         
-        if any(word + " " in new_query for word in question_words):
-            if query_words[-1][-1] in ['.','?','!']:
-                new_query = new_query[:-1] + "?"
-            else:
-                new_query += "?"
-        else:
-            if query_words[-1][-1] in ['.','?','!']:
-                new_query = new_query[:-1]+"."
-            else:
-                new_query += "."
-        return new_query.capitalize()
-    
-    def is_tamil(text):
-        """Check if the text contains any Tamil unicode characters."""
-        return any('\u0B80' <= ch <= '\u0BFF' for ch in text)
+    def audio_callback(self,indata,frames,time,status):
+        self.is_running=True
+        if self.is_running:
+            self.audio_queue.put(indata.copy())
+            energy=numpy.sqrt(numpy.mean(indata.astype(numpy.float32) ** 2))
+            self.energy_update.emit(energy)
 
+    def audio_recorder(self):
+        with sd.InputStream(samplerate=samplerate,channels=channels,blocksize=block_size,callback=self.audio_callback):
+            while self.is_running:
+                self.process_audio()
 
-    def universaltranslator(Text):
-        eng_tanslation=mt.translate(Text,"en","auto")
-        return eng_tanslation.capitalize()
+    def process_audio(self):
+        try:
+            block=self.audio_queue.get()
+            block_flatten=block.flatten()
+            energy=numpy.sqrt(numpy.mean(block_flatten.astype(numpy.float32) ** 2))
 
-
-    def _is_noise(self, text):
-        """Returns True only if we're in the TTS cooldown window (speaker bleed)."""
-        if not self.tts_active and (time.time() - self._tts_end_time) < self.TTS_COOLDOWN:
-            print(f"[STT] Ignored (TTS cooldown): {text}")
-            return True
-        return False
+            if energy > energy_threshold:
+                if not self.recording:
+                    self.speech_start.emit()
+                    self.recording=True
+                    self.audio_buffer = []
+                self.audio_buffer.append(block_flatten)
+                self.last_speech_time=time.time() 
+            elif self.recording:
+                if time.time() - self.last_speech_time > silence_timeout:
+                    self.recording=False
+                    if self.audio_buffer:
+                        complete_audio=numpy.concatenate(self.audio_buffer).astype(numpy.float32)   
+                        self.speech_end.emit(complete_audio)
+                        self.audio_buffer=[]
+        except queue.Empty:
+            pass
 
     def run(self):
         self.is_running = True
-        driver.get("file:///" + Link)
-        driver.find_element(by=By.ID, value="start").click()
-        self.speech_start.emit()
-        print("[STT] Web Speech recognition started")
-        Text = ""
-        while True:
-            try:
-                current = driver.find_element(by=By.ID, value="output").text.strip()
-                if current and current != Text:
-                    new_part=current[len(Text):].strip()
-                    if new_part:
-                        if self._is_noise(new_part):
-                            print(f"[STT] Ignored (noise): {new_part}")
-                            Text=current
-                            continue
-                        if Audiocapturerthread.is_tamil(new_part):
-                            translated_txt=mt.translate(new_part,"en","auto")
-                            result=Audiocapturerthread.querymodifier(translated_txt)
-                        else:
-                            result=Audiocapturerthread.querymodifier(new_part)
-                        if self.tts_active:
-                            self.speech_interrupt.emit(result)
-                        else:
-                            self.speech_detected.emit(result)
-                    Text=current
-                time.sleep(0.3)
-            except Exception as e:
-                if self.is_running:
-                    print(f"[STT] Error: {e}")
-                break
-
-    def reset(self):
-        """Clear Chrome output and reset — call when mic is toggled back on."""
-        try:
-            driver.find_element(By.ID, "end").click()
-            time.sleep(0.2)
-            driver.find_element(By.ID, "start").click()
-            print("[STT] Reset — listening fresh")
-        except Exception as e:
-            print(f"[STT] Reset error: {e}")
+        self.audio_recorder()
 
     def stop(self):
-        self.is_running = False
-        try:
-            driver.find_element(By.ID, "end").click()
-        except Exception:
-            pass
+        self.is_running=False
+        self.audio_queue.put(numpy.zeros((block_size, 1), dtype=numpy.float32))  # unblock queue.get()
         self.quit()
-        self.wait(3000)
+        self.wait(2000)
         if self.isRunning():
             self.terminate()
-    
+
 #-------Audio Transcriber Thread----------
 class Audiotranscriber(QThread):
     transcription_ready=pyqtSignal(str)
-
+ 
     def __init__(self):
         super().__init__()
-        self.data=""
-
-    def set_audio_data(self, text):
-        self.data=text
+        self.audio_data=None
+ 
+    def set_audio_data(self, audio_data):
+        self.audio_data=audio_data
     
     def run(self):
-        self.transcription_ready.emit(self.data)
+        if self.audio_data is not None:
+            try:
+                audio = self.audio_data.copy().astype(numpy.float32)
+ 
+                # --- Whistle/tone detector (spectral flatness) ---
+                # Speech has energy spread across many frequencies.
+                # A whistle is a single pure tone — energy concentrated in one spot.
+                # Spectral flatness close to 0 = pure tone (whistle). Close to 1 = speech.
+                fft = numpy.abs(numpy.fft.rfft(audio))
+                fft = fft + 1e-10  # avoid log(0)
+                geometric_mean = numpy.exp(numpy.mean(numpy.log(fft)))
+                arithmetic_mean = numpy.mean(fft)
+                spectral_flatness = geometric_mean / arithmetic_mean
+                if spectral_flatness < 0.1:  # pure tone detected
+                    print(f"[STT] Rejected unwanted/murmuring sound (flatness={spectral_flatness:.4f})")
+                    self.transcription_ready.emit("")
+                    return
+ 
+                # Boost volume 6x then normalize
+                audio = audio * 8.0
+                max_val = numpy.max(numpy.abs(audio))
+                if max_val > 0.009:
+                    audio = audio / max_val * 0.95
+                else:
+                    self.transcription_ready.emit("")
+                    return
+ 
+                # High-pass filter — removes Bluetooth hum/rumble
+                alpha = 0.97
+                filtered = numpy.zeros_like(audio)
+                filtered[0] = audio[0]
+                for i in range(1, len(audio)):
+                    filtered[i] = alpha * (filtered[i-1] + audio[i] - audio[i-1])
+                audio = filtered
+ 
+                wav_buffer=io.BytesIO()
+                soundfile.write(wav_buffer, audio, samplerate, format="WAV")
+                wav_buffer.seek(0)
+                transcription=client.audio.transcriptions.create(
+                    model="whisper-large-v3",
+                    temperature=0,
+                    file=("audio.wav",wav_buffer.read()),
+                    language="en",
+                    prompt="Jarvis, open, close, play, search, volume, brightness, speed, folder, file, create, delete, send, weather, time, date, news"
+                )
+                transcribed_text=transcription.text
+ 
+                self.transcription_ready.emit(transcribed_text)
+            except Exception as e:
+                print("Groq STT Error:", e)
+                self.transcription_ready.emit("")
 
 # --------Text-To-Speech Thread-------
 class TTSThread(QThread):
@@ -294,7 +235,6 @@ class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], operator.add]
     llm_calls: int
     last_url: str | None
-    file_location: str | None
 
 class GraphThread(QThread):
     finished_response = pyqtSignal(str)
@@ -323,20 +263,7 @@ class GraphThread(QThread):
                 msgs = msgs[1:]
             self.assistant.state["messages"] = msgs
 
-        msgs = results.get("messages", [])
-        if not msgs:
-            self.finished_response.emit("")
-            return
-
-        # Walk back to find the last AI text message (skip tool calls/results)
-        reply = ""
-        for msg in reversed(msgs):
-            content = getattr(msg, "content", "")
-            # skip tool messages and AI messages that are pure tool calls (no text)
-            if content and isinstance(content, str) and content.strip():
-                reply = content
-                break
-
+        reply = results["messages"][-1].content
         self.finished_response.emit(reply)
 #------------LLm Assistant-------------
 class LLMassistant:
@@ -358,9 +285,10 @@ class LLMassistant:
         self.llm=ChatGroq(
             model="openai/gpt-oss-20b",
             temperature=0,
+            max_tokens=300,
             api_key=api_key,
             reasoning_effort="low",
-            model_kwargs={"max_completion_tokens":4000
+            model_kwargs={"max_completion_tokens":5000
                           }
             )
 
@@ -384,22 +312,22 @@ class LLMassistant:
         def llm_call(state: AgentState):
             response = self.llm_with_tools.invoke(
                 [SystemMessage(
-                    content="You are JARVIS. "
-                            "You must always Address me as SIR. "
-                            "If the user asks to open any application or website, "
-                            "you MUST call the OpenApp tool. "
-                            "If the user asks to close an application, "
-                            "you MUST call the CloseApp tool. "
-                            "If the user asks to PLAY or WATCH a video on YouTube, "
-                            "you MUST first call web_search and then use the open_url to open the video, "
-                            "then call open_url with the returned URL. "
-                            "Do NOT use youtube_search tool for playing videos. "
-                            "Only use youtube_search when user wants to SEE search results. "
-                            "Do not refuse. Do not explain. "
-                            "Respond concisely. "
-                            "If user asks to control system settings like volume, brightness, WiFi, Bluetooth, "
-                            "you MUST call the appropriate tool."
-                            "you must not responsd with any special characters when questioned or requested by the user. just conversation without special characters just like JARVIS and IRONMAN"
+                    content="You are JARVIS.\
+                            You must always Address me as SIR.\
+                            If the user asks to open any application or website,\
+                            you MUST call the OpenApp tool.\
+                            If the user asks to close an application,\
+                            you MUST call the CloseApp tool.\
+                            If the user asks to PLAY or WATCH a video on YouTube,\
+                            you MUST first call web_search and then use the open_url to open the video,\
+                            then call open_url with the returned URL.\
+                            Do NOT use youtube_search tool for playing videos.\
+                            Only use youtube_search when user wants to SEE search results.\
+                            Do not refuse. Do not explain.\
+                            Respond concisely.\
+                            If user asks to control system settings like volume, brightness\
+                            you MUST call the appropriate tool.\
+                            you must not responsd with any special characters when questioned or requested by the user. just conversation without special characters just like JARVIS and IRONMAN"
                 )] + state["messages"]
             )
 
@@ -443,14 +371,12 @@ class LLMassistant:
 
         self.graph=builder.compile()
 
-        self.sig = LLMassistant._Signals()
         self.audio_thread = Audiocapturerthread()
         self.tts_thread = TTSThread()
         
-        self.audio_thread.speech_start.connect(lambda: print("[STT] Listening..."))
-        self.audio_thread.speech_detected.connect(self.process_speech)
-        self.audio_thread.speech_interrupt.connect(self.check_interrupt)
-        self.audio_thread.energy_update.connect(self.sig.energy.emit)
+        self.audio_thread.speech_start.connect(lambda: print("Speech Detected"))
+        self.audio_thread.speech_end.connect(self.process_speech)
+        self.audio_thread.energy_update.connect(self.check_interrupt)
         self.tts_thread.finished_speaking.connect(self.on_tts_finished)
         
         self.is_listening = False
@@ -459,6 +385,8 @@ class LLMassistant:
         
         self.tts_thread.start()
 
+
+        self.sig = LLMassistant._Signals()
         self.audio_thread.speech_start.connect(lambda: self.sig.speech_detected.emit())
         self.audio_thread.energy_update.connect(self.sig.energy.emit)
 
@@ -478,16 +406,20 @@ class LLMassistant:
         if self.tts_thread.isRunning():
             self.tts_thread.stop()
             
-    def process_speech(self, data):
+    def process_speech(self,audio_data):
+
+
         if not self.is_listening:
             print("[Assistant] Mic is off, ignoring speech")
-            return
+            return        
+
         if self.is_tts_active:
             print("[Assistant] Ignoring speech while TTS is active")
             return
 
-        self.transcriber = Audiotranscriber()
-        self.transcriber.set_audio_data(data)
+        print("[Assistant] Transcribing...")
+        self.transcriber=Audiotranscriber()
+        self.transcriber.set_audio_data(audio_data)
         self.transcriber.transcription_ready.connect(self.handle_transcription)
         self.transcriber.start()
     
@@ -523,22 +455,17 @@ class LLMassistant:
             reply = re.sub(r'https?://\S+', 'here is the link', reply)
         
         self.is_tts_active = True
-        self.audio_thread.tts_active = True
         self.sig.tts_started.emit() 
         self.tts_thread.add_text(reply)
         
-    def check_interrupt(self, text):
-        if self.is_tts_active:
-            print(f"[Assistant] Interrupted: {text}")
+    def check_interrupt(self,energy):
+        if self.is_tts_active and energy > energy_threshold * 3:
+            print("[Assistant] Interrupting speech...")
             self.tts_thread.stop_speaking()
-            self.audio_thread.tts_active = False
             QTimer.singleShot(500, lambda: setattr(self, 'is_tts_active', False))
-            QTimer.singleShot(600, lambda: self.handle_transcription(text))
 
     def on_tts_finished(self):
         self.is_tts_active = False
-        self.audio_thread.tts_active = False
-        self.audio_thread._tts_end_time = time.time()   # start cooldown window
         self.sig.tts_finished.emit()
         print("[Assistant] Ready for next command")
 
