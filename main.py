@@ -120,7 +120,7 @@ class Audiotranscriber(QThread):
                     return
  
                 # Boost volume 6x then normalize
-                audio = audio * 8.0
+                audio = audio * 10.0
                 max_val = numpy.max(numpy.abs(audio))
                 if max_val > 0.007:
                     audio = audio / max_val * 0.95
