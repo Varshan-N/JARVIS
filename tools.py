@@ -11,7 +11,6 @@ import psutil, threading, pyperclip, smtplib, imaplib
 import email as email_lib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from crompton import fan_on, fan_off, fan_speed
 
 
 load_dotenv()
@@ -755,28 +754,6 @@ def read_emails(count: int = 5) -> str:
     except Exception as e:
         return f"SIR, failed to read emails. Error: {str(e)}"
 
-
-@tool
-def clipboard_manager(action: str, text: str = "") -> str:
-    """
-    Reads from or writes to the system clipboard.
-
-    Use this when the user asks to copy text or check what's in the clipboard.
-
-    Parameters:
-        action (str): 'read' to get clipboard contents, 'write' to set them.
-        text (str): Text to copy (only used when action is 'write').
-    """
-    if action == "read":
-        content = pyperclip.paste()
-        return f"SIR, clipboard contains: {content}" if content else "SIR, clipboard is empty."
-    elif action == "write":
-        pyperclip.copy(text)
-        return f"SIR, copied to clipboard: {text}"
-    return "SIR, invalid clipboard action. Use 'read' or 'write'."
-
-
-
 @tool
 def get_stock_price(ticker: str) -> str:
     """
@@ -916,7 +893,7 @@ def system_power(action: str, delay_minutes: int = 0) -> str:
     return "SIR, unknown power action. Use lock, shutdown, restart, or cancel."
 
 
-CALENDAR_ID = "varshan.n2005@gmail.com"
+CALENDAR_ID = os.getenv("GMAIL_ADDRESS")
 
 def _get_calendar_service():
     """
@@ -1132,45 +1109,6 @@ def mark_event_done(title: str) -> str:
     except Exception as e:
         return f"SIR, failed to mark event. Error: {str(e)}"
     
-
-@tool
-def control_fan(command: str) -> str:
-    """
-    Controls the Crompton smart fan.
-    Use this when the user says anything about the fan — turning it on/off or changing speed.
-    
-    command examples:
-      "on"         → turns fan on
-      "off"        → turns fan off
-      "speed 3"    → sets speed to 3 (valid range: 1-6)
-      "on speed 5" → turns on and sets speed to 5
-    """
-    command = command.lower().strip()
-
-    speed = None
-    for word in command.split():
-        if word.isdigit() and 1 <= int(word) <= 6:
-            speed = int(word)
-            break
-
-    try:
-        if "off" in command:
-            fan_off()
-            return "SIR, the fan has been turned off."
-        elif "on" in command or "start" in command or "turn" in command:
-            fan_on()
-            if speed:
-                fan_speed(speed)
-                return f"SIR, the fan has been turned on at speed {speed}."
-            return "SIR, the fan has been turned on."
-        elif "speed" in command and speed is not None:
-            fan_speed(speed)
-            return f"SIR, fan speed set to {speed}."
-        else:
-            return f"SIR, I didn't understand the fan command: '{command}'. Try 'on', 'off', or 'speed 1-6'."
-    except Exception as e:
-        return f"SIR, fan control failed: {str(e)}"
-
 @tool
 def create_file_or_folder(path: str, kind: str = "folder") -> str:
     """

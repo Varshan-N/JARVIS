@@ -8,10 +8,5 @@ wheels/
 
 # Virtual environments
 .venv
-.env
 whatsapp_profile/
-service_account.json
 PyWhatKit_DB.txt
-crompton.py
-diag.py
-find_product.py

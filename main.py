@@ -13,7 +13,7 @@ from tools import OpenApp,CloseApp,open_url,web_search,GoogleSearchByTopic,fetch
                   set_volume,set_brightness,control_youtube,window_control,desktop_control,file_manager,youtube_search,\
                   get_time, get_date_and_day, get_weather, send_whatsapp_message, send_email, read_emails, get_news_headlines,\
                   get_stock_price, set_reminder, get_reminders, create_calendar_event, list_schedule, delete_calendar_event,\
-                  mark_event_done, take_screenshot, get_battery_status, get_system_stats, control_fan, system_power,\
+                  mark_event_done, take_screenshot, get_battery_status, get_system_stats, system_power,\
                   create_file_or_folder, delete_file_or_folder
 
 load_dotenv()
@@ -257,8 +257,8 @@ class GraphThread(QThread):
         self.assistant.state = results
 
         msgs = self.assistant.state["messages"]
-        if len(msgs) > 7:
-            msgs = msgs[-7:]
+        if len(msgs) > 8:
+            msgs = msgs[-8:]
             while msgs and not isinstance(msgs[0], HumanMessage):
                 msgs = msgs[1:]
             self.assistant.state["messages"] = msgs
@@ -288,7 +288,7 @@ class LLMassistant:
             max_tokens=300,
             api_key=api_key,
             reasoning_effort="low",
-            model_kwargs={"max_completion_tokens":5000
+            model_kwargs={"max_completion_tokens":4000
                           }
             )
 
@@ -305,7 +305,7 @@ class LLMassistant:
                 get_time, get_date_and_day, get_weather, take_screenshot,
                 get_battery_status, get_system_stats, set_reminder, get_reminders,
                 send_whatsapp_message, get_news_headlines, send_email, read_emails, get_stock_price, system_power,
-                create_calendar_event, list_schedule, delete_calendar_event, mark_event_done, control_fan, create_file_or_folder, delete_file_or_folder]   
+                create_calendar_event, list_schedule, delete_calendar_event, mark_event_done, create_file_or_folder, delete_file_or_folder]   
 
         self.llm_with_tools=self.llm.bind_tools(tools)
 
