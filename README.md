@@ -218,6 +218,12 @@ The system was validated across multiple layers:
   <img src="docs/JARVIS_Presentation.gif" width="900"/>
 </p>
 
+<p align="center">
+  <a href="docs/JARVIS_Presentation.pdf">
+    📑 View Complete Project Presentation
+  </a>
+</p>
+
 ---
 
 ## Contributing
