@@ -215,7 +215,7 @@ The system was validated across multiple layers:
 ## 🎬 Project Demo
 
 <p align="center">
-  <img src="assets/demo.gif" width="900"/>
+  <img src="docs/JARVIS_Presentation.gif" width="900"/>
 </p>
 
 ---
