@@ -212,6 +212,13 @@ The system was validated across multiple layers:
 - [ ] Encrypted cloud sync across devices
 
 ---
+## 🎬 Project Demo
+
+<p align="center">
+  <img src="assets/demo.gif" width="900"/>
+</p>
+
+---
 
 ## Contributing
 
